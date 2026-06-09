@@ -1,0 +1,11 @@
+bin/
+obj/
+*.user
+*.suo
+*.tmp
+dist/
+installer/build/
+tmp-croc-test/
+tmp-lan-server/
+librerias/
+drag.rar
