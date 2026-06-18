@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -46,6 +47,7 @@ namespace FileSender.Network
 
         public Task SendAsync(IEnumerable<string> paths, string code)
         {
+            code = NormalizeCode(code);
             var arguments = new StringBuilder();
             arguments.Append("--yes --disable-clipboard send --code ");
             arguments.Append(Quote(code));
@@ -59,6 +61,7 @@ namespace FileSender.Network
 
         public Task ReceiveAsync(string code, string outputDirectory)
         {
+            code = NormalizeCode(code);
             string arguments = "--yes --out " + Quote(outputDirectory) + " " + Quote(code);
             return RunAsync(arguments, outputDirectory);
         }
@@ -78,13 +81,35 @@ namespace FileSender.Network
         public static string GenerateCode()
         {
             const string alphabet = "abcdefghijkmnopqrstuvwxyz23456789";
-            var random = new Random();
-            var builder = new StringBuilder("fs-");
-            for (int i = 0; i < 10; i++)
+            var builder = new StringBuilder();
+            using (var random = new RNGCryptoServiceProvider())
             {
-                builder.Append(alphabet[random.Next(alphabet.Length)]);
+                byte[] buffer = new byte[6];
+                random.GetBytes(buffer);
+                for (int i = 0; i < buffer.Length; i++)
+                {
+                    builder.Append(alphabet[buffer[i] % alphabet.Length]);
+                }
             }
-            return builder.ToString();
+            return FormatCodeForDisplay(builder.ToString());
+        }
+
+        public static string NormalizeCode(string code)
+        {
+            string value = (code ?? "").Trim().ToLowerInvariant();
+            value = Regex.Replace(value, @"\s+", "");
+            if (value.StartsWith("fs-")) return value;
+            return value.Replace("-", "").Replace("_", "");
+        }
+
+        public static string FormatCodeForDisplay(string code)
+        {
+            string value = NormalizeCode(code);
+            if (value.Length == 6)
+            {
+                return value.Substring(0, 3) + "-" + value.Substring(3, 3);
+            }
+            return value;
         }
 
         private Task RunAsync(string arguments, string workingDirectory)
@@ -194,7 +219,7 @@ namespace FileSender.Network
             string value = line.ToLowerInvariant();
             if (value.Contains("room") && value.Contains("not ready"))
             {
-                RaiseState(CrocSessionState.WaitingForPeer, "La otra PC todavía no está lista o se desconectó. Reintentando con el mismo código.");
+                RaiseState(CrocSessionState.WaitingForPeer, "Esperando que la otra PC confirme el mismo código.");
             }
             else if (value.Contains("waiting") || value.Contains("code is") || value.Contains("receive code"))
             {
@@ -206,11 +231,11 @@ namespace FileSender.Network
             }
             else if (value.Contains("securing channel"))
             {
-                RaiseState(CrocSessionState.PeerConnected, "La otra PC respondió. Asegurando el canal cifrado.");
+                RaiseState(CrocSessionState.PeerConnected, "Canal seguro encontrado. Habilitando transferencia.");
             }
             else if (value.Contains("connected") || value.Contains("recipient") || value.Contains("sender"))
             {
-                RaiseState(CrocSessionState.PeerConnected, "Enlace activo. El otro equipo respondió.");
+                RaiseState(CrocSessionState.PeerConnected, "Canal habilitado. Preparando transferencia.");
             }
             else if (value.Contains("sending") || value.Contains("receiving") || value.Contains("%") || value.Contains("eta") || value.Contains("mb/s") || value.Contains("kb/s"))
             {

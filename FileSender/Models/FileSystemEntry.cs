@@ -8,6 +8,7 @@ namespace FileSender.Models
         public string FullPath { get; set; }
         public bool IsDirectory { get; set; }
         public long Size { get; set; }
+        public DateTime LastModifiedUtc { get; set; }
 
         public string DisplaySize
         {
@@ -15,6 +16,15 @@ namespace FileSender.Models
             {
                 if (IsDirectory) return "<carpeta>";
                 return FormatBytes(Size);
+            }
+        }
+
+        public string DisplayModified
+        {
+            get
+            {
+                if (LastModifiedUtc == DateTime.MinValue) return "";
+                return LastModifiedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
             }
         }
 

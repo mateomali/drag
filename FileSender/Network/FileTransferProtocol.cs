@@ -60,6 +60,25 @@ namespace FileSender.Network
         public const int Version = 1;
         public const string Magic = "FILE_SENDER";
         public const int ChunkSize = 1024 * 256;
+        private const string ExtendedListMarker = "|FS2";
+
+        public static string BuildPeerName(string peerName)
+        {
+            return (peerName ?? "") + ExtendedListMarker;
+        }
+
+        public static string StripPeerMarker(string peerName)
+        {
+            string value = peerName ?? "";
+            return value.EndsWith(ExtendedListMarker, StringComparison.Ordinal)
+                ? value.Substring(0, value.Length - ExtendedListMarker.Length)
+                : value;
+        }
+
+        public static bool SupportsExtendedList(string peerName)
+        {
+            return (peerName ?? "").EndsWith(ExtendedListMarker, StringComparison.Ordinal);
+        }
 
         public static void WriteHello(BinaryWriter writer, string key, string peerName)
         {
@@ -67,7 +86,7 @@ namespace FileSender.Network
             writer.Write(Magic);
             writer.Write(Version);
             writer.Write(key ?? "");
-            writer.Write(peerName ?? "");
+            writer.Write(BuildPeerName(peerName));
         }
 
         public static void WriteHelloResult(BinaryWriter writer, bool accepted, string message, string peerName)
@@ -75,7 +94,7 @@ namespace FileSender.Network
             writer.Write((byte)MessageType.HelloResult);
             writer.Write(accepted);
             writer.Write(message ?? "");
-            writer.Write(peerName ?? "");
+            writer.Write(BuildPeerName(peerName));
         }
 
         public static void WriteListRequest(BinaryWriter writer, string path)
@@ -84,7 +103,7 @@ namespace FileSender.Network
             writer.Write(path ?? "");
         }
 
-        public static void WriteListResponse(BinaryWriter writer, ListResponse response)
+        public static void WriteListResponse(BinaryWriter writer, ListResponse response, bool includeModified)
         {
             writer.Write((byte)MessageType.ListResponse);
             writer.Write(response.Path ?? "");
@@ -95,6 +114,7 @@ namespace FileSender.Network
                 writer.Write(entry.FullPath ?? "");
                 writer.Write(entry.IsDirectory);
                 writer.Write(entry.Size);
+                if (includeModified) writer.Write(entry.LastModifiedUtc.Ticks);
             }
         }
 
@@ -158,20 +178,25 @@ namespace FileSender.Network
             return reader.ReadString();
         }
 
-        public static ListResponse ReadListResponse(BinaryReader reader)
+        public static ListResponse ReadListResponse(BinaryReader reader, bool includesModified)
         {
             var response = new ListResponse();
             response.Path = reader.ReadString();
             int count = reader.ReadInt32();
             for (int i = 0; i < count; i++)
             {
-                response.Entries.Add(new FileSystemEntry
+                var entry = new FileSystemEntry
                 {
                     Name = reader.ReadString(),
                     FullPath = reader.ReadString(),
                     IsDirectory = reader.ReadBoolean(),
                     Size = reader.ReadInt64()
-                });
+                };
+                if (includesModified)
+                {
+                    entry.LastModifiedUtc = new DateTime(reader.ReadInt64(), DateTimeKind.Utc);
+                }
+                response.Entries.Add(entry);
             }
             return response;
         }

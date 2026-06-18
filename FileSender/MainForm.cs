@@ -1,5 +1,7 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Drawing;
 using System.IO;
 using System.Net;
@@ -30,35 +32,44 @@ namespace FileSender
         private static readonly Color BorderColor = Color.FromArgb(211, 218, 230);
         private static readonly Color TextColor = Color.FromArgb(31, 41, 55);
         private static readonly Color MutedTextColor = Color.FromArgb(91, 101, 117);
+        private static readonly Color FolderRowColor = Color.FromArgb(255, 248, 225);
+        private static readonly Color FolderTextColor = Color.FromArgb(120, 72, 18);
+        private static readonly Color FileRowColor = Color.White;
+        private static readonly Color ParentRowColor = Color.FromArgb(239, 244, 250);
+        private static readonly Color ParentTextColor = Color.FromArgb(67, 80, 98);
 
         private ComboBox _modeCombo;
         private ComboBox _scopeCombo;
-        private TextBox _ipText;
+        private ComboBox _ipText;
         private TextBox _portText;
         private TextBox _keyText;
         private Button _connectButton;
         private Button _discoverButton;
-        private Button _connectSelectedServerButton;
-        private Label _settingsSummaryLabel;
         private Label _localIpLabel;
         private TextBox _crocCodeText;
         private TextBox _crocReceiveCodeText;
         private TextBox _crocPathText;
         private TextBox _crocLogText;
+        private TextBox _crocLocalPathText;
+        private TextBox _crocReceiveDestinationText;
         private Label _crocStateLabel;
         private ProgressBar _crocProgressBar;
         private Label _crocProgressLabel;
-        private ComboBox _crocRoleCombo;
-        private Panel _crocRoleHostPanel;
+        private DataGridView _crocLocalGrid;
         private Control _crocSendPanel;
-        private Control _crocReceivePanel;
         private Button _crocGenerateCodeButton;
         private Button _crocPickFileButton;
         private Button _crocPickFolderButton;
+        private Button _crocLocalDrivesButton;
+        private Button _crocLocalBrowseButton;
+        private Button _crocLocalUpButton;
+        private Button _crocUseSelectionButton;
+        private Button _crocSendRoleButton;
+        private Button _crocReceiveRoleButton;
+        private Button _crocReceiveBrowseButton;
         private Button _crocSendButton;
         private Button _crocReceiveButton;
         private Button _crocCancelButton;
-        private ListBox _serversList;
         private TextBox _localPathText;
         private TextBox _remotePathText;
         private DataGridView _localGrid;
@@ -85,6 +96,9 @@ namespace FileSender
         private Control _localConnectionPanel;
         private Control _localFilePanel;
         private Control _localProgressPanel;
+        private Control _crocRolePromptPanel;
+        private Control _crocSendModePanel;
+        private Control _crocReceiveModePanel;
 
         private TransferServer _server;
         private DiscoveryService _discovery;
@@ -94,21 +108,41 @@ namespace FileSender
         private AppSettings _settings;
         private string _localCurrentPath;
         private string _remoteCurrentPath;
+        private string _crocReceiveFolder;
         private bool _directRemoteMode;
         private int _workMode;
+        private int _crocRole;
+        private bool _loadingCrocLocalPath;
+        private bool _crocSelectionFromGrid;
         private Point _localDragStartPoint;
         private Point _remoteDragStartPoint;
+        private bool _localDragDropArmed;
+        private bool _remoteDragDropArmed;
+        private int _localSelectionAnchorRow = -1;
+        private int _remoteSelectionAnchorRow = -1;
+        private List<string> _localDragPaths;
+        private List<string> _remoteDragPaths;
+        private readonly Queue<QueuedSend> _sendQueue = new Queue<QueuedSend>();
+        private bool _sendQueueRunning;
         private readonly List<string> _crocSelectedPaths = new List<string>();
         private const string LocalPathsDragFormat = "FileSender.LocalPaths";
         private const string RemotePathsDragFormat = "FileSender.RemotePaths";
         private ExistingItemMode _existingItemMode = ExistingItemMode.Ask;
 
+        private sealed class QueuedSend
+        {
+            public List<string> Paths { get; set; }
+            public string DestinationDirectory { get; set; }
+            public string Name { get; set; }
+        }
+
         public MainForm()
         {
             Text = "File Sender";
-            Width = 1280;
-            Height = 760;
-            MinimumSize = new Size(1100, 620);
+            Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            Width = 1440;
+            Height = 900;
+            MinimumSize = new Size(1280, 760);
             StartPosition = FormStartPosition.CenterScreen;
 
             _settings = AppSettings.Load();
@@ -118,6 +152,7 @@ namespace FileSender
                 ? _settings.LocalStartFolder
                 : Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
             LoadLocalPath(_localCurrentPath);
+            LoadCrocLocalPath(_localCurrentPath);
             SetStatus("Seleccione Modo Local, Modo Remoto o Remoto Directo para comenzar.");
         }
 
@@ -143,8 +178,8 @@ namespace FileSender
             MainMenuStrip = menu;
             Controls.Add(menu);
 
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, Padding = new Padding(12, 38, 12, 12) };
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
+            var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, Padding = new Padding(10, 34, 10, 10) };
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
             Controls.Add(root);
@@ -272,7 +307,9 @@ namespace FileSender
             grid.DefaultCellStyle.SelectionBackColor = PrimarySelectedColor;
             grid.DefaultCellStyle.SelectionForeColor = TextColor;
             grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(248, 250, 252);
-            grid.RowTemplate.Height = 26;
+            grid.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
+            grid.RowTemplate.Height = 32;
+            grid.AllowUserToResizeRows = false;
         }
 
         private Control BuildModeSelector()
@@ -313,8 +350,7 @@ namespace FileSender
             ApplyModeButtonState(_remoteDirectModeButton, remoteDirect);
             _directRemoteMode = remoteDirect;
             if (_scopeCombo != null) _scopeCombo.SelectedIndex = remoteDirect ? 1 : 0;
-            if (_serversList != null) _serversList.Items.Clear();
-            if (_connectSelectedServerButton != null) _connectSelectedServerButton.Enabled = false;
+            if (_ipText != null) _ipText.Items.Clear();
             if (_discoverButton != null) _discoverButton.Enabled = local;
 
             if (remoteByCode)
@@ -339,11 +375,11 @@ namespace FileSender
         private Control BuildLocalModePanel()
         {
             var group = new GroupBox { Dock = DockStyle.Fill, Text = "Transferencia directa por IP - paneles local/remoto" };
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, Padding = new Padding(8) };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 126));
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, Padding = new Padding(6) };
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 104));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 84));
             group.Controls.Add(layout);
 
             layout.Controls.Add(BuildLocalRoleSelector(), 0, 0);
@@ -362,7 +398,7 @@ namespace FileSender
             var panel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 1 };
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-            _localSendRoleButton = new Button { Dock = DockStyle.Fill, Text = "Conectar o recibir archivos\r\nEsta PC escucha automáticamente", Font = new Font(Font.FontFamily, 11, FontStyle.Bold) };
+            _localSendRoleButton = new Button { Dock = DockStyle.Fill, Text = "Conectar o recibir archivos - esta PC escucha automáticamente", Font = new Font(Font.FontFamily, 10, FontStyle.Bold) };
             _localSendRoleButton.Click += (s, e) => ShowLocalRole(true);
             panel.Controls.Add(_localSendRoleButton, 0, 0);
             return panel;
@@ -402,10 +438,16 @@ namespace FileSender
 
         private Control BuildConnectionPanel()
         {
-            var panel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 9, RowCount = 2 };
-            for (int i = 0; i < 9; i++) panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 11.11f));
-            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
-            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+            var panel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 8, RowCount = 1, Padding = new Padding(0, 2, 0, 0) };
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 86));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 108));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 108));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 29));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 86));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 29));
+            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
 
             _modeCombo = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
             _modeCombo.Items.AddRange(new object[] { "Servidor", "Cliente" });
@@ -415,36 +457,29 @@ namespace FileSender
             _scopeCombo.SelectedIndex = 0;
             _scopeCombo.SelectedIndexChanged += (s, e) => ApplyScopeText();
 
-            _ipText = new TextBox { Dock = DockStyle.Fill, Text = "127.0.0.1" };
+            _ipText = new ComboBox { Dock = DockStyle.Fill, Text = "127.0.0.1", DropDownStyle = ComboBoxStyle.DropDown };
             _portText = new TextBox { Dock = DockStyle.Fill, Text = _settings.TcpPort.ToString(), Visible = false };
             _keyText = new TextBox { Dock = DockStyle.Fill, Text = _settings.SharedKey, UseSystemPasswordChar = true, Visible = false };
             _connectButton = new Button { Dock = DockStyle.Fill, Text = "Conectar" };
             _discoverButton = new Button { Dock = DockStyle.Fill, Text = "Buscar PC" };
-            _connectSelectedServerButton = new Button { Dock = DockStyle.Fill, Text = "Conectar seleccionado", Enabled = false };
-            _settingsSummaryLabel = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
             _localIpLabel = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
-            _serversList = new ListBox { Dock = DockStyle.Fill };
 
-            _connectButton.Click += async (s, e) => await ConnectToIpAsync(_ipText.Text.Trim());
+            _connectButton.Click += async (s, e) => await ConnectTargetAsync();
             _discoverButton.Click += async (s, e) => await DiscoverAsync();
-            _connectSelectedServerButton.Click += async (s, e) => await ConnectSelectedServerAsync();
-            _serversList.SelectedIndexChanged += (s, e) => _connectSelectedServerButton.Enabled = _serversList.SelectedItem is DiscoveredServer;
+            _ipText.KeyDown += async (s, e) =>
+            {
+                if (e.KeyCode != Keys.Enter) return;
+                e.SuppressKeyPress = true;
+                await ConnectTargetAsync();
+            };
 
-            panel.Controls.Add(new Label { Text = "IP para conexión", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
-            panel.SetColumnSpan(_ipText, 2);
+            panel.Controls.Add(new Label { Text = "Destino", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
             panel.Controls.Add(_ipText, 1, 0);
-            panel.Controls.Add(_connectButton, 7, 0);
-            panel.Controls.Add(_discoverButton, 8, 0);
-
-            panel.Controls.Add(new Label { Text = "Configuración", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 1);
-            panel.SetColumnSpan(_settingsSummaryLabel, 2);
-            panel.Controls.Add(_settingsSummaryLabel, 1, 1);
-            panel.SetColumnSpan(_localIpLabel, 2);
-            panel.Controls.Add(_localIpLabel, 3, 1);
-            panel.Controls.Add(new Label { Text = "Servidores LAN", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 5, 1);
-            panel.SetColumnSpan(_serversList, 2);
-            panel.Controls.Add(_serversList, 6, 1);
-            panel.Controls.Add(_connectSelectedServerButton, 8, 1);
+            panel.Controls.Add(_connectButton, 2, 0);
+            panel.Controls.Add(_discoverButton, 3, 0);
+            panel.Controls.Add(new Label { Text = "Esta PC", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 4, 0);
+            panel.SetColumnSpan(_localIpLabel, 3);
+            panel.Controls.Add(_localIpLabel, 5, 0);
 
             UpdateSettingsSummary();
             return panel;
@@ -452,7 +487,7 @@ namespace FileSender
 
         private Control BuildFilePanel()
         {
-            var split = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
+            var split = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Padding = new Padding(0), Margin = new Padding(0) };
             split.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             split.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             split.Controls.Add(BuildLocalPanel(), 0, 0);
@@ -481,9 +516,14 @@ namespace FileSender
             buttons.Controls.Add(_sendButton, 3, 0);
 
             _localGrid.AllowDrop = true;
-            _localGrid.CellDoubleClick += (s, e) => OpenLocalSelection();
+            _localGrid.CellDoubleClick += (s, e) =>
+            {
+                if (e.RowIndex >= 0) OpenLocalSelection();
+            };
+            _localGrid.KeyDown += LocalGridKeyDown;
             _localGrid.MouseDown += LocalGridMouseDown;
             _localGrid.MouseMove += LocalGridMouseMove;
+            _localGrid.MouseUp += LocalGridMouseUp;
             _localGrid.DragEnter += LocalGridDragEnter;
             _localGrid.DragDrop += async (s, e) => await LocalGridDragDropAsync(e);
             return panel;
@@ -513,9 +553,14 @@ namespace FileSender
             buttons.Controls.Add(_remoteBrowseButton, 2, 0);
 
             _remoteGrid.AllowDrop = true;
-            _remoteGrid.CellDoubleClick += (s, e) => OpenRemoteSelection();
+            _remoteGrid.CellDoubleClick += (s, e) =>
+            {
+                if (e.RowIndex >= 0) OpenRemoteSelection();
+            };
+            _remoteGrid.KeyDown += RemoteGridKeyDown;
             _remoteGrid.MouseDown += RemoteGridMouseDown;
             _remoteGrid.MouseMove += RemoteGridMouseMove;
+            _remoteGrid.MouseUp += RemoteGridMouseUp;
             _remoteGrid.DragEnter += RemoteGridDragEnter;
             _remoteGrid.DragDrop += async (s, e) => await RemoteGridDragDropAsync(e);
             return panel;
@@ -523,11 +568,11 @@ namespace FileSender
 
         private Panel BuildBrowserPanel(string title, out TextBox pathText, out DataGridView grid)
         {
-            var panel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(5) };
+            var panel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4) };
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1 };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 22));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             panel.Controls.Add(layout);
 
@@ -550,35 +595,74 @@ namespace FileSender
                 AllowUserToDeleteRows = false,
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 MultiSelect = true,
-                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
                 RowHeadersVisible = false
             };
+            grid.ColumnHeaderMouseClick += GridColumnHeaderMouseClick;
             grid.Columns.Add("Name", "Nombre");
+            grid.Columns.Add("Modified", "Modificado");
             grid.Columns.Add("Size", "Tamaño");
-            grid.Columns["Size"].Width = 110;
+            grid.Columns["Name"].AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+            grid.Columns["Modified"].AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            grid.Columns["Modified"].Width = 136;
+            grid.Columns["Size"].AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            grid.Columns["Size"].Width = 126;
+            foreach (DataGridViewColumn column in grid.Columns)
+            {
+                column.SortMode = DataGridViewColumnSortMode.Programmatic;
+            }
             layout.Controls.Add(grid, 0, 3);
 
             panel.Tag = buttons;
             return panel;
         }
 
+        private DataGridView BuildEntryGrid()
+        {
+            var grid = new DataGridView
+            {
+                Dock = DockStyle.Fill,
+                ReadOnly = true,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                MultiSelect = true,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
+                RowHeadersVisible = false
+            };
+            grid.ColumnHeaderMouseClick += GridColumnHeaderMouseClick;
+            grid.Columns.Add("Name", "Nombre");
+            grid.Columns.Add("Modified", "Modificado");
+            grid.Columns.Add("Size", "Tamaño");
+            grid.Columns["Name"].AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+            grid.Columns["Modified"].AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            grid.Columns["Modified"].Width = 136;
+            grid.Columns["Size"].AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            grid.Columns["Size"].Width = 126;
+            foreach (DataGridViewColumn column in grid.Columns)
+            {
+                column.SortMode = DataGridViewColumnSortMode.Programmatic;
+            }
+            return grid;
+        }
+
         private Control BuildProgressPanel()
         {
             var panel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1 };
-            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 22));
+            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
+            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 22));
+            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
             _progressBar = new ProgressBar { Dock = DockStyle.Fill };
             PrepareProgressBar(_progressBar);
             _progressLabel = new Label { Dock = DockStyle.Fill, Text = "Total: sin transferencia.", TextAlign = ContentAlignment.MiddleLeft };
             _fileProgressBar = new ProgressBar { Dock = DockStyle.Fill };
             PrepareProgressBar(_fileProgressBar);
             _fileProgressLabel = new Label { Dock = DockStyle.Fill, Text = "Archivo: sin transferencia.", TextAlign = ContentAlignment.MiddleLeft };
-            panel.Controls.Add(_progressBar, 0, 0);
-            panel.Controls.Add(_progressLabel, 0, 1);
-            panel.Controls.Add(_fileProgressBar, 0, 2);
-            panel.Controls.Add(_fileProgressLabel, 0, 3);
+            panel.Controls.Add(_fileProgressBar, 0, 0);
+            panel.Controls.Add(_fileProgressLabel, 0, 1);
+            panel.Controls.Add(_progressBar, 0, 2);
+            panel.Controls.Add(_progressLabel, 0, 3);
             return panel;
         }
 
@@ -586,71 +670,201 @@ namespace FileSender
         {
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(2) };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 128));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 108));
 
-            _crocRoleCombo = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
-            _crocRoleCombo.Items.AddRange(new object[] { "Emisor - esta PC envía archivos", "Receptor - esta PC recibe archivos" });
-            _crocRoleCombo.SelectedIndex = 0;
             _crocCodeText = new TextBox { Dock = DockStyle.Fill };
             _crocReceiveCodeText = new TextBox { Dock = DockStyle.Fill };
-            _crocPathText = new TextBox { Dock = DockStyle.Fill, ReadOnly = true };
+            _crocPathText = new TextBox { Dock = DockStyle.Fill, ReadOnly = true, Text = "Sin selección para enviar." };
+            _crocReceiveDestinationText = new TextBox { Dock = DockStyle.Fill, ReadOnly = true };
             _crocLogText = new TextBox { Dock = DockStyle.Fill, ReadOnly = true, Multiline = true, ScrollBars = ScrollBars.Vertical };
             _crocStateLabel = new Label { Dock = DockStyle.Fill, Text = "Enlace: sin preparar", TextAlign = ContentAlignment.MiddleLeft, Font = new Font(Font, FontStyle.Bold) };
             _crocProgressBar = new ProgressBar { Dock = DockStyle.Fill };
             PrepareProgressBar(_crocProgressBar);
             _crocProgressLabel = new Label { Dock = DockStyle.Fill, Text = "Progreso remoto: sin transferencia.", TextAlign = ContentAlignment.MiddleLeft };
-            _crocGenerateCodeButton = new Button { Dock = DockStyle.Fill, Text = "Generar código" };
+            _crocGenerateCodeButton = new Button { Dock = DockStyle.Fill, Text = "Nuevo código" };
             _crocPickFileButton = new Button { Dock = DockStyle.Fill, Text = "Elegir archivo" };
             _crocPickFolderButton = new Button { Dock = DockStyle.Fill, Text = "Elegir carpeta" };
-            _crocSendButton = new Button { Dock = DockStyle.Fill, Text = "Iniciar envío", Enabled = false };
-            _crocReceiveButton = new Button { Dock = DockStyle.Fill, Text = "Iniciar recepción", Enabled = false };
+            _crocLocalDrivesButton = new Button { Dock = DockStyle.Fill, Text = "Unidades" };
+            _crocLocalBrowseButton = new Button { Dock = DockStyle.Fill, Text = "Elegir carpeta" };
+            _crocLocalUpButton = new Button { Dock = DockStyle.Fill, Text = "Subir" };
+            _crocUseSelectionButton = new Button { Dock = DockStyle.Fill, Text = "Usar selección" };
+            _crocSendRoleButton = new Button { Dock = DockStyle.Fill, Text = "Enviar" };
+            _crocReceiveRoleButton = new Button { Dock = DockStyle.Fill, Text = "Recibir" };
+            _crocReceiveBrowseButton = new Button { Dock = DockStyle.Fill, Text = "Elegir destino" };
+            _crocSendButton = new Button { Dock = DockStyle.Fill, Text = "Enviar", Enabled = false };
+            _crocReceiveButton = new Button { Dock = DockStyle.Fill, Text = "Esperar enlace", Enabled = false };
             _crocCancelButton = new Button { Dock = DockStyle.Fill, Text = "Cancelar", Enabled = false };
 
-            _crocRoleCombo.SelectedIndexChanged += (s, e) => UpdateCrocRoleVisibility();
+            _crocSendRoleButton.Click += (s, e) => SelectCrocRole(1);
+            _crocReceiveRoleButton.Click += (s, e) => SelectCrocRole(2);
             _crocCodeText.TextChanged += (s, e) => UpdateCrocButtons();
             _crocReceiveCodeText.TextChanged += (s, e) => UpdateCrocButtons();
             _crocGenerateCodeButton.Click += (s, e) =>
             {
                 _crocCodeText.Text = CrocTransferService.GenerateCode();
-                ApplyCrocState(CrocSessionState.Idle, "Rol emisor listo. Compartí el código con el receptor.");
+                ApplyCrocState(CrocSessionState.Idle, "Código de envío listo. Compartilo con la otra PC.");
             };
             _crocPickFileButton.Click += (s, e) => PickCrocFiles();
             _crocPickFolderButton.Click += (s, e) => PickCrocFolder();
+            _crocLocalDrivesButton.Click += (s, e) => LoadCrocLocalPath("");
+            _crocLocalBrowseButton.Click += (s, e) => BrowseCrocLocal();
+            _crocLocalUpButton.Click += (s, e) => LoadCrocLocalPath(ParentPath(_crocLocalPathText.Text == "Este equipo" ? "" : _crocLocalPathText.Text));
+            _crocUseSelectionButton.Click += (s, e) => UseCrocGridSelection();
             _crocSendButton.Click += async (s, e) => await SendWithCrocAsync();
             _crocReceiveButton.Click += async (s, e) => await ReceiveWithCrocAsync();
+            _crocReceiveBrowseButton.Click += (s, e) => BrowseCrocReceiveFolder();
             _crocCancelButton.Click += (s, e) => _croc.Cancel();
 
             layout.Controls.Add(BuildCrocRoleSelector(), 0, 0);
-
-            _crocRoleHostPanel = new Panel { Dock = DockStyle.Fill };
-            _crocSendPanel = BuildCrocSendPanel();
-            _crocReceivePanel = BuildCrocReceivePanel();
-            _crocRoleHostPanel.Controls.Add(_crocSendPanel);
-            _crocRoleHostPanel.Controls.Add(_crocReceivePanel);
-            layout.Controls.Add(_crocRoleHostPanel, 0, 1);
-
+            layout.Controls.Add(BuildCrocRoleContentPanel(), 0, 1);
             layout.Controls.Add(_crocStateLabel, 0, 2);
-
             layout.Controls.Add(BuildCrocProgressPanel(), 0, 3);
             layout.Controls.Add(_crocLogText, 0, 4);
-            UpdateCrocRoleVisibility();
+            SelectCrocRole(0);
+            UpdateCrocReceiveDestinationText();
+            UpdateCrocButtons();
             return layout;
         }
 
         private Control BuildCrocRoleSelector()
         {
-            var panel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1 };
-            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
+            var panel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 1, Padding = new Padding(4, 2, 4, 2) };
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 86));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
-            panel.Controls.Add(new Label { Text = "Rol de esta PC", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
-            panel.Controls.Add(_crocRoleCombo, 1, 0);
-            panel.Controls.Add(_crocCancelButton, 2, 0);
+            panel.Controls.Add(new Label { Dock = DockStyle.Fill, Text = "Cambiar rol", TextAlign = ContentAlignment.MiddleLeft, Font = new Font(Font, FontStyle.Bold) }, 0, 0);
+            panel.Controls.Add(_crocSendRoleButton, 1, 0);
+            panel.Controls.Add(_crocReceiveRoleButton, 2, 0);
+            panel.Controls.Add(_crocCancelButton, 4, 0);
             return panel;
+        }
+
+        private Control BuildCrocRoleContentPanel()
+        {
+            var host = new Panel { Dock = DockStyle.Fill };
+            _crocRolePromptPanel = BuildCrocRolePromptPanel();
+            _crocSendModePanel = BuildCrocSendModePanel();
+            _crocReceiveModePanel = BuildCrocReceiveModePanel();
+            host.Controls.Add(_crocRolePromptPanel);
+            host.Controls.Add(_crocSendModePanel);
+            host.Controls.Add(_crocReceiveModePanel);
+            return host;
+        }
+
+        private Control BuildCrocRolePromptPanel()
+        {
+            var panel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8) };
+            var label = new Label { Dock = DockStyle.Top, Height = 28, Text = "Elegí Enviar archivos o Recibir archivos para iniciar.", TextAlign = ContentAlignment.MiddleLeft, ForeColor = MutedTextColor };
+            panel.Controls.Add(label);
+            return panel;
+        }
+
+        private Control BuildCrocSendModePanel()
+        {
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Padding = new Padding(4) };
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            layout.Controls.Add(BuildCrocSendToolbar(), 0, 0);
+            var group = new GroupBox { Dock = DockStyle.Fill, Text = "Local - archivos para enviar" };
+            _crocSendPanel = BuildCrocSendPanel();
+            group.Controls.Add(_crocSendPanel);
+            layout.Controls.Add(group, 0, 1);
+            return layout;
+        }
+
+        private Control BuildCrocReceiveModePanel()
+        {
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Padding = new Padding(4) };
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            layout.Controls.Add(BuildCrocReceiveCodePanel(), 0, 0);
+            layout.Controls.Add(BuildCrocReceiveDestinationPanel(), 1, 0);
+            return layout;
+        }
+
+        private void SelectCrocRole(int role)
+        {
+            if (_croc != null && _croc.IsRunning) return;
+
+            _crocRole = role;
+            if (_crocRolePromptPanel != null) _crocRolePromptPanel.Visible = role == 0;
+            if (_crocSendModePanel != null) _crocSendModePanel.Visible = role == 1;
+            if (_crocReceiveModePanel != null) _crocReceiveModePanel.Visible = role == 2;
+            if (_crocSendModePanel != null) _crocSendModePanel.Dock = DockStyle.Fill;
+            if (_crocReceiveModePanel != null) _crocReceiveModePanel.Dock = DockStyle.Fill;
+            if (_crocRolePromptPanel != null) _crocRolePromptPanel.Dock = DockStyle.Fill;
+
+            ApplyModeButtonState(_crocSendRoleButton, role == 1);
+            ApplyModeButtonState(_crocReceiveRoleButton, role == 2);
+
+            if (role == 1)
+            {
+                ApplyCrocState(CrocSessionState.Idle, "Modo envío listo.");
+                SetStatus("Remoto sin puertos: rol Enviar activo. Podés cambiar a Recibir desde la barra superior.");
+            }
+            else if (role == 2)
+            {
+                UpdateCrocReceiveDestinationText();
+                ApplyCrocState(CrocSessionState.Idle, "Modo recepción listo.");
+                SetStatus("Remoto sin puertos: rol Recibir activo. Podés cambiar a Enviar desde la barra superior.");
+            }
+            else
+            {
+                ApplyCrocState(CrocSessionState.Idle, "Elegí rol para iniciar una transferencia sin puertos.");
+                SetStatus("Remoto sin puertos: elegí Enviar o Recibir.");
+            }
+            UpdateCrocButtons();
+        }
+
+        private Control BuildCrocSendToolbar()
+        {
+            var panel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 1 };
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
+            panel.Controls.Add(new Label { Text = "Enviar", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Font = new Font(Font, FontStyle.Bold) }, 0, 0);
+            panel.Controls.Add(new Label { Text = "Código corto", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 1, 0);
+            panel.Controls.Add(_crocCodeText, 2, 0);
+            panel.Controls.Add(_crocGenerateCodeButton, 3, 0);
+            panel.Controls.Add(_crocSendButton, 4, 0);
+            return panel;
+        }
+
+        private Control BuildCrocReceiveCodePanel()
+        {
+            var group = new GroupBox { Dock = DockStyle.Fill, Text = "Código de recepción" };
+            var layout = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 1, RowCount = 3, Padding = new Padding(8), Height = 112 };
+            group.Controls.Add(layout);
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            layout.Controls.Add(new Label { Text = "Código recibido", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+            layout.Controls.Add(_crocReceiveCodeText, 0, 1);
+            layout.Controls.Add(_crocReceiveButton, 0, 2);
+            return group;
+        }
+
+        private Control BuildCrocReceiveDestinationPanel()
+        {
+            var group = new GroupBox { Dock = DockStyle.Fill, Text = "Destino de recepción" };
+            var layout = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 1, RowCount = 3, Padding = new Padding(8), Height = 112 };
+            group.Controls.Add(layout);
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            layout.Controls.Add(new Label { Text = "Guardar en", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+            layout.Controls.Add(_crocReceiveDestinationText, 0, 1);
+            layout.Controls.Add(_crocReceiveBrowseButton, 0, 2);
+            return group;
         }
 
         private Control BuildCrocProgressPanel()
@@ -665,49 +879,46 @@ namespace FileSender
 
         private Control BuildCrocSendPanel()
         {
-            var panel = new GroupBox { Dock = DockStyle.Fill, Text = "Rol Emisor - genera código y envía" };
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 3, Padding = new Padding(4) };
+            var panel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4) };
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
             panel.Controls.Add(layout);
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-            layout.Controls.Add(_crocGenerateCodeButton, 0, 0);
-            layout.Controls.Add(_crocPickFileButton, 1, 0);
-            layout.Controls.Add(_crocPickFolderButton, 2, 0);
-            layout.Controls.Add(_crocSendButton, 3, 0);
-            layout.Controls.Add(new Label { Text = "Código para el receptor", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 1);
-            layout.SetColumnSpan(_crocCodeText, 3);
-            layout.Controls.Add(_crocCodeText, 1, 1);
-            layout.Controls.Add(new Label { Text = "Archivo/carpeta", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 2);
-            layout.SetColumnSpan(_crocPathText, 3);
-            layout.Controls.Add(_crocPathText, 1, 2);
-            return panel;
-        }
+            var selectionRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
+            selectionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 108));
+            selectionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            selectionRow.Controls.Add(new Label { Text = "Selección envío", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+            _crocPathText.TextAlign = HorizontalAlignment.Left;
+            selectionRow.Controls.Add(_crocPathText, 1, 0);
+            layout.Controls.Add(selectionRow, 0, 0);
 
-        private Control BuildCrocReceivePanel()
-        {
-            var panel = new GroupBox { Dock = DockStyle.Fill, Text = "Rol Receptor - ingresa código y recibe" };
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 2, Padding = new Padding(4) };
-            panel.Controls.Add(layout);
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+            var buttonRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 7, RowCount = 1 };
+            buttonRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            buttonRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 98));
+            buttonRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 116));
+            buttonRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 82));
+            buttonRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
+            buttonRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
+            buttonRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
+            buttonRow.Controls.Add(_crocLocalPathText = new TextBox { Dock = DockStyle.Fill }, 0, 0);
+            buttonRow.Controls.Add(_crocLocalDrivesButton, 1, 0);
+            buttonRow.Controls.Add(_crocLocalBrowseButton, 2, 0);
+            buttonRow.Controls.Add(_crocLocalUpButton, 3, 0);
+            buttonRow.Controls.Add(_crocUseSelectionButton, 4, 0);
+            buttonRow.Controls.Add(_crocPickFileButton, 5, 0);
+            buttonRow.Controls.Add(_crocPickFolderButton, 6, 0);
+            layout.Controls.Add(buttonRow, 0, 1);
 
-            layout.Controls.Add(new Label { Text = "Código del emisor", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
-            layout.Controls.Add(_crocReceiveCodeText, 1, 0);
-            layout.SetColumnSpan(_crocReceiveButton, 2);
-            layout.Controls.Add(_crocReceiveButton, 2, 0);
-            var destinationLabel = new Label { Text = "Destino: carpeta de recibidos configurada", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
-            layout.SetColumnSpan(destinationLabel, 4);
-            layout.Controls.Add(destinationLabel, 0, 1);
+            _crocLocalGrid = BuildEntryGrid();
+            _crocLocalGrid.CellDoubleClick += (s, e) =>
+            {
+                if (e.RowIndex >= 0) OpenCrocLocalSelection();
+            };
+            _crocLocalGrid.KeyDown += CrocLocalGridKeyDown;
+            _crocLocalGrid.SelectionChanged += (s, e) => ApplyCrocGridSelection(false);
+            layout.Controls.Add(_crocLocalGrid, 0, 2);
             return panel;
         }
 
@@ -797,30 +1008,56 @@ namespace FileSender
                 return;
             }
 
-            _serversList.Items.Clear();
+            string typedTarget = _ipText.Text;
+            _ipText.Items.Clear();
             SetStatus("Buscando servidores en la red local...");
             List<DiscoveredServer> servers = await DiscoveryService.DiscoverAsync(1600);
             foreach (DiscoveredServer server in servers)
             {
-                _serversList.Items.Add(server);
+                _ipText.Items.Add(server);
             }
-            _connectSelectedServerButton.Enabled = false;
-            SetStatus(servers.Count == 0
-                ? "No se encontraron servidores LAN. Verificá que la otra PC tenga File Sender abierto en Modo Local y que Firewall permita la app."
-                : "Servidores LAN encontrados: " + servers.Count + ". Seleccioná uno y pulsá Conectar.");
+            if (servers.Count == 1)
+            {
+                _ipText.SelectedItem = servers[0];
+                SetStatus("PC encontrada: " + servers[0] + ". Pulsá Conectar o Enter.");
+                return;
+            }
+
+            if (servers.Count > 1)
+            {
+                _ipText.Text = "";
+                _ipText.DroppedDown = true;
+                SetStatus("PCs encontradas: " + servers.Count + ". Elegí una del selector o escribí una IP.");
+                return;
+            }
+
+            _ipText.Text = typedTarget;
+            SetStatus("No se encontraron PCs. Verificá que la otra PC tenga File Sender abierto en Modo Local y que Firewall permita la app.");
         }
 
         private async Task ConnectSelectedServerAsync()
         {
-            var selected = _serversList.SelectedItem as DiscoveredServer;
+            var selected = _ipText.SelectedItem as DiscoveredServer;
             if (selected == null)
             {
-                SetStatus("Seleccioná un servidor LAN encontrado.");
+                await ConnectTargetAsync();
                 return;
             }
 
             _ipText.Text = selected.Address;
             await ConnectToIpAsync(selected.Address, selected.Port);
+        }
+
+        private async Task ConnectTargetAsync()
+        {
+            var selected = _ipText.SelectedItem as DiscoveredServer;
+            if (selected != null && string.Equals(_ipText.Text, selected.ToString(), StringComparison.Ordinal))
+            {
+                await ConnectSelectedServerAsync();
+                return;
+            }
+
+            await ConnectToIpAsync(_ipText.Text.Trim());
         }
 
         private void AttachConnection(PeerConnection connection)
@@ -886,8 +1123,6 @@ namespace FileSender
 
         private void UpdateSettingsSummary()
         {
-            if (_settingsSummaryLabel == null || _settings == null) return;
-            _settingsSummaryLabel.Text = "Puerto " + _settings.TcpPort + " | Recibidos: " + ShortPath(_settings.ReceiveFolder);
             if (_localIpLabel != null)
             {
                 _localIpLabel.Text = "IP de esta PC: " + GetLocalIpSummary();
@@ -918,13 +1153,6 @@ namespace FileSender
                 }
             }
             return addresses;
-        }
-
-        private static string ShortPath(string path)
-        {
-            if (string.IsNullOrWhiteSpace(path)) return "";
-            const int max = 48;
-            return path.Length <= max ? path : "..." + path.Substring(path.Length - max);
         }
 
         private void ApplyScopeText()
@@ -973,27 +1201,77 @@ namespace FileSender
                         string name = string.IsNullOrWhiteSpace(label)
                             ? drive.Name
                             : drive.Name + " " + label;
-                        AddRow(_localGrid, new FileSystemEntry { Name = name, FullPath = drive.Name, IsDirectory = true });
+                        AddRow(_localGrid, new FileSystemEntry { Name = name, FullPath = drive.Name, IsDirectory = true, LastModifiedUtc = DateTime.MinValue });
                     }
                     return;
                 }
 
                 DirectoryInfo directory = new DirectoryInfo(path);
-                if (directory.Parent != null) AddRow(_localGrid, new FileSystemEntry { Name = "..", FullPath = directory.Parent.FullName, IsDirectory = true });
-                else AddRow(_localGrid, new FileSystemEntry { Name = "..", FullPath = "", IsDirectory = true });
+                if (directory.Parent != null) AddRow(_localGrid, new FileSystemEntry { Name = "..", FullPath = directory.Parent.FullName, IsDirectory = true, LastModifiedUtc = directory.Parent.LastWriteTimeUtc });
+                else AddRow(_localGrid, new FileSystemEntry { Name = "..", FullPath = "", IsDirectory = true, LastModifiedUtc = DateTime.MinValue });
 
                 foreach (DirectoryInfo child in directory.GetDirectories())
                 {
-                    AddRow(_localGrid, new FileSystemEntry { Name = child.Name, FullPath = child.FullName, IsDirectory = true });
+                    AddRow(_localGrid, new FileSystemEntry { Name = child.Name, FullPath = child.FullName, IsDirectory = true, LastModifiedUtc = child.LastWriteTimeUtc });
                 }
                 foreach (FileInfo file in directory.GetFiles())
                 {
-                    AddRow(_localGrid, new FileSystemEntry { Name = file.Name, FullPath = file.FullName, IsDirectory = false, Size = file.Length });
+                    AddRow(_localGrid, new FileSystemEntry { Name = file.Name, FullPath = file.FullName, IsDirectory = false, Size = file.Length, LastModifiedUtc = file.LastWriteTimeUtc });
                 }
             }
             catch (Exception ex)
             {
                 SetStatus("No se pudo abrir carpeta local: " + ex.Message);
+            }
+        }
+
+        private void LoadCrocLocalPath(string path)
+        {
+            if (_crocLocalGrid == null || _crocLocalPathText == null) return;
+
+            try
+            {
+                _loadingCrocLocalPath = true;
+                if (_crocSelectionFromGrid) ClearCrocPreparedSelection();
+                _crocLocalPathText.Text = string.IsNullOrEmpty(path) ? "Este equipo" : path;
+                UpdateCrocReceiveDestinationText();
+                _crocLocalGrid.Rows.Clear();
+
+                if (string.IsNullOrEmpty(path))
+                {
+                    foreach (DriveInfo drive in DriveInfo.GetDrives())
+                    {
+                        string label = drive.IsReady ? drive.VolumeLabel : "";
+                        string name = string.IsNullOrWhiteSpace(label)
+                            ? drive.Name
+                            : drive.Name + " " + label;
+                        AddRow(_crocLocalGrid, new FileSystemEntry { Name = name, FullPath = drive.Name, IsDirectory = true, LastModifiedUtc = DateTime.MinValue });
+                    }
+                    return;
+                }
+
+                DirectoryInfo directory = new DirectoryInfo(path);
+                if (directory.Parent != null) AddRow(_crocLocalGrid, new FileSystemEntry { Name = "..", FullPath = directory.Parent.FullName, IsDirectory = true, LastModifiedUtc = directory.Parent.LastWriteTimeUtc });
+                else AddRow(_crocLocalGrid, new FileSystemEntry { Name = "..", FullPath = "", IsDirectory = true, LastModifiedUtc = DateTime.MinValue });
+
+                foreach (DirectoryInfo child in directory.GetDirectories())
+                {
+                    AddRow(_crocLocalGrid, new FileSystemEntry { Name = child.Name, FullPath = child.FullName, IsDirectory = true, LastModifiedUtc = child.LastWriteTimeUtc });
+                }
+                foreach (FileInfo file in directory.GetFiles())
+                {
+                    AddRow(_crocLocalGrid, new FileSystemEntry { Name = file.Name, FullPath = file.FullName, IsDirectory = false, Size = file.Length, LastModifiedUtc = file.LastWriteTimeUtc });
+                }
+            }
+            catch (Exception ex)
+            {
+                SetStatus("No se pudo abrir carpeta para envío remoto: " + ex.Message);
+            }
+            finally
+            {
+                if (_crocLocalGrid != null) _crocLocalGrid.ClearSelection();
+                _loadingCrocLocalPath = false;
+                UpdateCrocButtons();
             }
         }
 
@@ -1062,8 +1340,101 @@ namespace FileSender
 
         private static void AddRow(DataGridView grid, FileSystemEntry entry)
         {
-            int row = grid.Rows.Add(entry.Name, entry.DisplaySize);
-            grid.Rows[row].Tag = entry;
+            int row = grid.Rows.Add(entry.Name, entry.DisplayModified, entry.DisplaySize);
+            DataGridViewRow gridRow = grid.Rows[row];
+            gridRow.Tag = entry;
+            ApplyEntryRowStyle(gridRow, entry);
+        }
+
+        private static void GridColumnHeaderMouseClick(object sender, DataGridViewCellMouseEventArgs e)
+        {
+            var grid = sender as DataGridView;
+            if (grid == null || e.ColumnIndex < 0) return;
+
+            DataGridViewColumn column = grid.Columns[e.ColumnIndex];
+            ListSortDirection direction = column.HeaderCell.SortGlyphDirection == SortOrder.Ascending
+                ? ListSortDirection.Descending
+                : ListSortDirection.Ascending;
+
+            foreach (DataGridViewColumn item in grid.Columns)
+            {
+                item.HeaderCell.SortGlyphDirection = SortOrder.None;
+            }
+
+            grid.Sort(new EntryRowComparer(column.Name, direction));
+            column.HeaderCell.SortGlyphDirection = direction == ListSortDirection.Ascending
+                ? SortOrder.Ascending
+                : SortOrder.Descending;
+        }
+
+        private static void ApplyEntryRowStyle(DataGridViewRow row, FileSystemEntry entry)
+        {
+            bool isParent = entry != null && entry.Name == "..";
+            bool isDirectory = entry != null && entry.IsDirectory;
+            Color backColor = isParent ? ParentRowColor : isDirectory ? FolderRowColor : FileRowColor;
+            Color foreColor = isParent ? ParentTextColor : isDirectory ? FolderTextColor : TextColor;
+
+            row.DefaultCellStyle.BackColor = backColor;
+            row.DefaultCellStyle.ForeColor = foreColor;
+            row.DefaultCellStyle.SelectionBackColor = PrimarySelectedColor;
+            row.DefaultCellStyle.SelectionForeColor = foreColor;
+            row.DefaultCellStyle.Font = isDirectory
+                ? new Font(row.DataGridView.Font, FontStyle.Bold)
+                : row.DataGridView.Font;
+            row.Cells["Size"].Style.ForeColor = isDirectory ? MutedTextColor : Color.FromArgb(71, 85, 105);
+            row.Cells["Modified"].Style.ForeColor = MutedTextColor;
+        }
+
+        private sealed class EntryRowComparer : IComparer
+        {
+            private readonly string _columnName;
+            private readonly ListSortDirection _direction;
+
+            public EntryRowComparer(string columnName, ListSortDirection direction)
+            {
+                _columnName = columnName;
+                _direction = direction;
+            }
+
+            public int Compare(object x, object y)
+            {
+                var leftRow = x as DataGridViewRow;
+                var rightRow = y as DataGridViewRow;
+                var left = leftRow == null ? null : leftRow.Tag as FileSystemEntry;
+                var right = rightRow == null ? null : rightRow.Tag as FileSystemEntry;
+
+                bool leftParent = left != null && left.Name == "..";
+                bool rightParent = right != null && right.Name == "..";
+                if (leftParent != rightParent) return leftParent ? -1 : 1;
+
+                int result = CompareEntries(left, right, _columnName);
+                if (_direction == ListSortDirection.Descending) result = -result;
+                return result;
+            }
+
+            private static int CompareEntries(FileSystemEntry left, FileSystemEntry right, string columnName)
+            {
+                if (ReferenceEquals(left, right)) return 0;
+                if (left == null) return -1;
+                if (right == null) return 1;
+
+                int result;
+                if (columnName == "Size")
+                {
+                    result = left.Size.CompareTo(right.Size);
+                }
+                else if (columnName == "Modified")
+                {
+                    result = left.LastModifiedUtc.CompareTo(right.LastModifiedUtc);
+                }
+                else
+                {
+                    result = string.Compare(left.Name, right.Name, StringComparison.CurrentCultureIgnoreCase);
+                }
+
+                if (result != 0) return result;
+                return string.Compare(left.Name, right.Name, StringComparison.CurrentCultureIgnoreCase);
+            }
         }
 
         private void BrowseLocal()
@@ -1121,9 +1492,10 @@ namespace FileSender
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
                 _crocSelectedPaths.Clear();
                 _crocSelectedPaths.AddRange(dialog.FileNames);
+                _crocSelectionFromGrid = false;
                 _crocPathText.Text = string.Join("; ", _crocSelectedPaths.ToArray());
                 if (string.IsNullOrWhiteSpace(_crocCodeText.Text)) _crocCodeText.Text = CrocTransferService.GenerateCode();
-                ApplyCrocState(CrocSessionState.Idle, "Rol emisor listo. Generá o compartí el código con el receptor.");
+                ApplyCrocState(CrocSessionState.Idle, "Archivo listo para enviar. Usá o generá un código propio.");
                 UpdateCrocButtons();
             }
         }
@@ -1136,11 +1508,114 @@ namespace FileSender
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
                 _crocSelectedPaths.Clear();
                 _crocSelectedPaths.Add(dialog.SelectedPath);
+                _crocSelectionFromGrid = false;
                 _crocPathText.Text = dialog.SelectedPath;
                 if (string.IsNullOrWhiteSpace(_crocCodeText.Text)) _crocCodeText.Text = CrocTransferService.GenerateCode();
-                ApplyCrocState(CrocSessionState.Idle, "Rol emisor listo. Generá o compartí el código con el receptor.");
+                ApplyCrocState(CrocSessionState.Idle, "Carpeta lista para enviar. Usá o generá un código propio.");
                 UpdateCrocButtons();
             }
+        }
+
+        private void BrowseCrocLocal()
+        {
+            using (var dialog = new FolderBrowserDialog())
+            {
+                string current = _crocLocalPathText == null ? "" : NormalizeTypedPath(_crocLocalPathText.Text, "Este equipo");
+                if (Directory.Exists(current)) dialog.SelectedPath = current;
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                LoadCrocLocalPath(dialog.SelectedPath);
+            }
+        }
+
+        private void BrowseCrocReceiveFolder()
+        {
+            using (var dialog = new FolderBrowserDialog())
+            {
+                string current = CurrentCrocReceiveFolder();
+                if (Directory.Exists(current)) dialog.SelectedPath = current;
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                _crocReceiveFolder = dialog.SelectedPath;
+                UpdateCrocReceiveDestinationText();
+            }
+        }
+
+        private void OpenCrocLocalSelection()
+        {
+            FileSystemEntry entry = SelectedEntry(_crocLocalGrid);
+            if (entry != null && entry.IsDirectory) LoadCrocLocalPath(entry.FullPath);
+        }
+
+        private void CrocLocalGridKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;
+                e.Handled = true;
+                OpenCrocLocalSelection();
+                return;
+            }
+
+            if (e.KeyCode == Keys.Back)
+            {
+                e.SuppressKeyPress = true;
+                e.Handled = true;
+                string current = _crocLocalPathText == null ? "" : NormalizeTypedPath(_crocLocalPathText.Text, "Este equipo");
+                LoadCrocLocalPath(ParentPath(current));
+            }
+        }
+
+        private void UseCrocGridSelection()
+        {
+            ApplyCrocGridSelection(true);
+        }
+
+        private void ApplyCrocGridSelection(bool showEmptyMessage)
+        {
+            if (_loadingCrocLocalPath || _crocRole != 1) return;
+
+            List<string> paths = SelectedCrocLocalPaths();
+            if (paths.Count == 0)
+            {
+                ClearCrocPreparedSelection();
+                if (showEmptyMessage) SetStatus("Seleccioná archivos o carpetas para enviar.");
+                return;
+            }
+
+            _crocSelectedPaths.Clear();
+            _crocSelectedPaths.AddRange(paths);
+            _crocSelectionFromGrid = true;
+            _crocPathText.Text = BuildCrocSelectionText(paths);
+            if (string.IsNullOrWhiteSpace(_crocCodeText.Text)) _crocCodeText.Text = CrocTransferService.GenerateCode();
+            ApplyCrocState(CrocSessionState.Idle, "Envío preparado. Compartí el código con la otra PC.");
+            UpdateCrocButtons();
+        }
+
+        private void ClearCrocPreparedSelection()
+        {
+            _crocSelectedPaths.Clear();
+            _crocSelectionFromGrid = false;
+            if (_crocPathText != null) _crocPathText.Text = "Sin selección para enviar.";
+            UpdateCrocButtons();
+        }
+
+        private List<string> SelectedCrocLocalPaths()
+        {
+            var paths = new List<string>();
+            if (_crocLocalGrid == null) return paths;
+
+            foreach (DataGridViewRow row in _crocLocalGrid.SelectedRows)
+            {
+                var entry = row.Tag as FileSystemEntry;
+                if (entry != null && entry.Name != "..") paths.Add(entry.FullPath);
+            }
+            return paths;
+        }
+
+        private static string BuildCrocSelectionText(List<string> paths)
+        {
+            if (paths == null || paths.Count == 0) return "";
+            if (paths.Count == 1) return paths[0];
+            return paths[0] + " y " + (paths.Count - 1) + " más";
         }
 
         private async Task SendWithCrocAsync()
@@ -1150,10 +1625,10 @@ namespace FileSender
                 SetStatus("Elegí uno o más archivos o una carpeta para enviar.");
                 return;
             }
-            string code = _crocCodeText.Text.Trim();
+            string code = CrocTransferService.NormalizeCode(_crocCodeText.Text);
             if (code.Length < 6)
             {
-                SetStatus("El código debe tener al menos 6 caracteres.");
+                SetStatus("El código corto debe tener 6 caracteres.");
                 return;
             }
 
@@ -1162,8 +1637,8 @@ namespace FileSender
                 SetCrocRunning(true);
                 ResetCrocProgress(true);
                 _crocLogText.Clear();
-                ApplyCrocState(CrocSessionState.WaitingForPeer, "Rol emisor activo. Esperando que el receptor ingrese el código.");
-                AppendCrocLog("Código para el receptor: " + code);
+                ApplyCrocState(CrocSessionState.WaitingForPeer, "Envío activo. Esperando que la otra PC ingrese el código.");
+                AppendCrocLog("Código de envío: " + CrocTransferService.FormatCodeForDisplay(code));
                 await _croc.SendAsync(_crocSelectedPaths, code);
             }
             catch (Exception ex)
@@ -1175,7 +1650,7 @@ namespace FileSender
 
         private async Task ReceiveWithCrocAsync()
         {
-            string code = _crocReceiveCodeText.Text.Trim();
+            string code = CrocTransferService.NormalizeCode(_crocReceiveCodeText.Text);
             if (code.Length < 6)
             {
                 SetStatus("Ingresá el código recibido.");
@@ -1187,11 +1662,12 @@ namespace FileSender
                 SetCrocRunning(true);
                 ResetCrocProgress(true);
                 _crocLogText.Clear();
-                ApplyCrocState(CrocSessionState.WaitingForPeer, "Rol receptor activo. Esperando que el emisor inicie el envío.");
-                string receiveFolder = Directory.Exists(_settings.ReceiveFolder) ? _settings.ReceiveFolder : _localCurrentPath;
-                AppendCrocLog("Recibiendo en: " + receiveFolder);
+                ApplyCrocState(CrocSessionState.WaitingForPeer, "Validando enlace. Esperando que la otra PC use el mismo código.");
+                string receiveFolder = CurrentCrocReceiveFolder();
+                AppendCrocLog("Destino de recepción: " + receiveFolder);
+                AppendCrocLog("Esperando enlace con la otra PC...");
                 await _croc.ReceiveAsync(code, receiveFolder);
-                LoadLocalPath(receiveFolder);
+                LoadCrocLocalPath(receiveFolder);
             }
             catch (Exception ex)
             {
@@ -1202,10 +1678,17 @@ namespace FileSender
 
         private void SetCrocRunning(bool running)
         {
-            _crocRoleCombo.Enabled = !running;
-            _crocGenerateCodeButton.Enabled = !running;
-            _crocPickFileButton.Enabled = !running;
-            _crocPickFolderButton.Enabled = !running;
+            if (_crocSendRoleButton != null) _crocSendRoleButton.Enabled = !running;
+            if (_crocReceiveRoleButton != null) _crocReceiveRoleButton.Enabled = !running;
+            _crocGenerateCodeButton.Enabled = !running && _crocRole == 1;
+            _crocPickFileButton.Enabled = !running && _crocRole == 1;
+            _crocPickFolderButton.Enabled = !running && _crocRole == 1;
+            if (_crocReceiveBrowseButton != null) _crocReceiveBrowseButton.Enabled = !running && _crocRole == 2;
+            if (_crocLocalDrivesButton != null) _crocLocalDrivesButton.Enabled = !running;
+            if (_crocLocalBrowseButton != null) _crocLocalBrowseButton.Enabled = !running;
+            if (_crocLocalUpButton != null) _crocLocalUpButton.Enabled = !running;
+            if (_crocUseSelectionButton != null) _crocUseSelectionButton.Enabled = !running;
+            if (_crocLocalGrid != null) _crocLocalGrid.Enabled = !running;
             _crocCodeText.ReadOnly = running;
             _crocReceiveCodeText.ReadOnly = running;
             _crocCancelButton.Enabled = running;
@@ -1220,38 +1703,41 @@ namespace FileSender
         private void UpdateCrocButtons()
         {
             bool running = _croc != null && _croc.IsRunning;
-            bool senderRole = IsCrocSenderRole();
-            bool hasSendCode = _crocCodeText != null && _crocCodeText.Text.Trim().Length >= 6;
-            bool hasReceiveCode = _crocReceiveCodeText != null && _crocReceiveCodeText.Text.Trim().Length >= 6;
+            bool hasSendCode = _crocCodeText != null && CrocTransferService.NormalizeCode(_crocCodeText.Text).Length >= 6;
+            bool hasReceiveCode = _crocReceiveCodeText != null && CrocTransferService.NormalizeCode(_crocReceiveCodeText.Text).Length >= 6;
             bool hasSelection = _crocSelectedPaths.Count > 0;
-            _crocRoleCombo.Enabled = !running;
-            _crocGenerateCodeButton.Enabled = !running;
-            _crocPickFileButton.Enabled = !running;
-            _crocPickFolderButton.Enabled = !running;
+            if (_crocSendRoleButton != null) _crocSendRoleButton.Enabled = !running;
+            if (_crocReceiveRoleButton != null) _crocReceiveRoleButton.Enabled = !running;
+            _crocGenerateCodeButton.Enabled = !running && _crocRole == 1;
+            _crocPickFileButton.Enabled = !running && _crocRole == 1;
+            _crocPickFolderButton.Enabled = !running && _crocRole == 1;
+            if (_crocReceiveBrowseButton != null) _crocReceiveBrowseButton.Enabled = !running && _crocRole == 2;
+            if (_crocLocalDrivesButton != null) _crocLocalDrivesButton.Enabled = !running && _crocRole == 1;
+            if (_crocLocalBrowseButton != null) _crocLocalBrowseButton.Enabled = !running && _crocRole == 1;
+            if (_crocLocalUpButton != null) _crocLocalUpButton.Enabled = !running && _crocRole == 1;
+            if (_crocUseSelectionButton != null) _crocUseSelectionButton.Enabled = !running && _crocRole == 1;
+            if (_crocLocalGrid != null) _crocLocalGrid.Enabled = !running && _crocRole == 1;
             _crocCodeText.ReadOnly = running;
             _crocReceiveCodeText.ReadOnly = running;
-            _crocSendButton.Enabled = !running && senderRole && hasSendCode && hasSelection;
-            _crocReceiveButton.Enabled = !running && !senderRole && hasReceiveCode;
+            _crocSendButton.Enabled = !running && _crocRole == 1 && hasSendCode && hasSelection;
+            _crocReceiveButton.Enabled = !running && _crocRole == 2 && hasReceiveCode;
             _crocCancelButton.Enabled = running;
         }
 
-        private bool IsCrocSenderRole()
+        private string CurrentCrocReceiveFolder()
         {
-            return _crocRoleCombo == null || _crocRoleCombo.SelectedIndex == 0;
+            if (Directory.Exists(_crocReceiveFolder)) return _crocReceiveFolder;
+            string current = _crocLocalPathText == null ? "" : NormalizeTypedPath(_crocLocalPathText.Text, "Este equipo");
+            if (Directory.Exists(current)) return current;
+            if (Directory.Exists(_settings.ReceiveFolder)) return _settings.ReceiveFolder;
+            if (Directory.Exists(_localCurrentPath)) return _localCurrentPath;
+            return Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
         }
 
-        private void UpdateCrocRoleVisibility()
+        private void UpdateCrocReceiveDestinationText()
         {
-            if (_crocSendPanel == null || _crocReceivePanel == null) return;
-            bool senderRole = IsCrocSenderRole();
-            _crocSendPanel.Visible = senderRole;
-            _crocReceivePanel.Visible = !senderRole;
-            _crocSendPanel.Dock = DockStyle.Fill;
-            _crocReceivePanel.Dock = DockStyle.Fill;
-            ApplyCrocState(CrocSessionState.Idle, senderRole
-                ? "Rol emisor seleccionado. Elegí archivo/carpeta y generá un código."
-                : "Rol receptor seleccionado. Pegá el código del emisor.");
-            UpdateCrocButtons();
+            if (_crocReceiveDestinationText == null) return;
+            _crocReceiveDestinationText.Text = CurrentCrocReceiveFolder();
         }
 
         private void ApplyCrocState(CrocSessionState state, string message)
@@ -1267,8 +1753,16 @@ namespace FileSender
                     color = Color.DarkOrange;
                     break;
                 case CrocSessionState.PeerConnected:
-                    prefix = "Enlace: conectado";
+                    prefix = "Enlace: canal habilitado";
                     color = Color.DarkGreen;
+                    if (_crocProgressBar != null)
+                    {
+                        _crocProgressBar.Style = ProgressBarStyle.Marquee;
+                    }
+                    if (_crocProgressLabel != null)
+                    {
+                        _crocProgressLabel.Text = "Progreso remoto: canal habilitado, preparando transferencia...";
+                    }
                     break;
                 case CrocSessionState.Transferring:
                     prefix = "Enlace: conectado, transfiriendo";
@@ -1311,7 +1805,7 @@ namespace FileSender
             _crocProgressBar.Value = 0;
             SetProgressActive(_crocProgressBar);
             _crocProgressLabel.Text = waiting
-                ? "Progreso remoto: esperando enlace con la otra PC..."
+                ? "Progreso remoto: esperando canal habilitado..."
                 : "Progreso remoto: sin transferencia.";
         }
 
@@ -1343,7 +1837,42 @@ namespace FileSender
                 BeginInvoke(new Action<string>(AppendCrocLog), line);
                 return;
             }
-            _crocLogText.AppendText(line + Environment.NewLine);
+            string displayLine = FriendlyCrocLogLine(line);
+            if (string.IsNullOrWhiteSpace(displayLine)) return;
+            _crocLogText.AppendText(displayLine + Environment.NewLine);
+        }
+
+        private static string FriendlyCrocLogLine(string line)
+        {
+            if (string.IsNullOrWhiteSpace(line)) return "";
+            string value = line.Trim();
+            string lower = value.ToLowerInvariant();
+
+            if (lower == "connecting..." || lower.Contains("connecting"))
+            {
+                return "Conectando con la otra PC...";
+            }
+            if (lower.Contains("room") && lower.Contains("not ready"))
+            {
+                return "Esperando que la otra PC use el mismo código...";
+            }
+            if (lower.Contains("securing channel"))
+            {
+                return "Canal encontrado. Habilitando transferencia segura...";
+            }
+            if (lower.Contains("connected"))
+            {
+                return "Canal habilitado. Preparando transferencia...";
+            }
+            if (lower.Contains("sender"))
+            {
+                return "Canal habilitado con la PC emisora.";
+            }
+            if (lower.Contains("recipient"))
+            {
+                return "Canal habilitado con la PC receptora.";
+            }
+            return value;
         }
 
         private void LoadParentLocal()
@@ -1370,6 +1899,42 @@ namespace FileSender
             if (entry != null && entry.IsDirectory && _connection != null)
             {
                 _connection.RequestRemoteList(entry.FullPath);
+            }
+        }
+
+        private void LocalGridKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;
+                e.Handled = true;
+                OpenLocalSelection();
+                return;
+            }
+
+            if (e.KeyCode == Keys.Back)
+            {
+                e.SuppressKeyPress = true;
+                e.Handled = true;
+                LoadParentLocal();
+            }
+        }
+
+        private void RemoteGridKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;
+                e.Handled = true;
+                OpenRemoteSelection();
+                return;
+            }
+
+            if (e.KeyCode == Keys.Back)
+            {
+                e.SuppressKeyPress = true;
+                e.Handled = true;
+                if (_connection != null) _connection.RequestRemoteList(ParentPath(_remoteCurrentPath));
             }
         }
 
@@ -1419,18 +1984,72 @@ namespace FileSender
                 return;
             }
 
+            var pathList = new List<string>();
+            foreach (string path in paths ?? new string[0])
+            {
+                if (!string.IsNullOrWhiteSpace(path)) pathList.Add(path);
+            }
+
+            if (pathList.Count == 0)
+            {
+                SetStatus("Seleccioná uno o más archivos o carpetas para enviar.");
+                return;
+            }
+
+            _sendQueue.Enqueue(new QueuedSend
+            {
+                Paths = pathList,
+                DestinationDirectory = _remoteCurrentPath,
+                Name = BuildQueuedSendName(pathList)
+            });
+
+            if (_sendQueueRunning)
+            {
+                SetStatus("Agregado a la cola: " + BuildQueuedSendName(pathList) + ". En espera: " + _sendQueue.Count + ".");
+                return;
+            }
+
+            await ProcessSendQueueAsync();
+        }
+
+        private async Task ProcessSendQueueAsync()
+        {
+            if (_sendQueueRunning) return;
+            _sendQueueRunning = true;
+
             try
             {
-                ResetProgress();
-                SetStatus("Enviando...");
-                await _connection.SendPathsAsync(paths, _remoteCurrentPath);
-                _connection.RequestRemoteList(_remoteCurrentPath);
-                SetStatus("Envío finalizado.");
+                while (_sendQueue.Count > 0)
+                {
+                    QueuedSend item = _sendQueue.Dequeue();
+                    ResetProgress();
+                    SetStatus("Enviando: " + item.Name + QueueSuffix());
+                    await _connection.SendPathsAsync(item.Paths, item.DestinationDirectory);
+                    _connection.RequestRemoteList(item.DestinationDirectory);
+                    SetStatus("Envío finalizado: " + item.Name + QueueSuffix());
+                }
             }
             catch (Exception ex)
             {
-                SetStatus("Error enviando: " + ex.Message);
+                SetStatus("Error enviando: " + ex.Message + QueueSuffix());
             }
+            finally
+            {
+                _sendQueueRunning = false;
+            }
+        }
+
+        private string QueueSuffix()
+        {
+            return _sendQueue.Count == 0 ? "" : " - en cola: " + _sendQueue.Count;
+        }
+
+        private static string BuildQueuedSendName(List<string> paths)
+        {
+            if (paths == null || paths.Count == 0) return "transferencia";
+            string first = Path.GetFileName(paths[0].TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (string.IsNullOrWhiteSpace(first)) first = paths[0];
+            return paths.Count == 1 ? first : first + " y " + (paths.Count - 1) + " más";
         }
 
         private TransferDecision RequestTransferDecision(TransferOffer offer)
@@ -1467,12 +2086,19 @@ namespace FileSender
 
         private void LocalGridMouseDown(object sender, MouseEventArgs e)
         {
-            _localDragStartPoint = e.Button == MouseButtons.Left ? e.Location : Point.Empty;
+            PrepareGridMouseDown(_localGrid, e, out _localDragStartPoint, out _localDragDropArmed, out _localSelectionAnchorRow);
+            _localDragPaths = _localDragDropArmed ? SelectedLocalPaths() : null;
         }
 
         private void LocalGridMouseMove(object sender, MouseEventArgs e)
         {
             if (e.Button != MouseButtons.Left || _localDragStartPoint == Point.Empty) return;
+            if (!_localDragDropArmed)
+            {
+                ExtendMouseSelection(_localGrid, _localSelectionAnchorRow, e.Location);
+                return;
+            }
+
             Rectangle dragBox = new Rectangle(
                 _localDragStartPoint.X - SystemInformation.DragSize.Width / 2,
                 _localDragStartPoint.Y - SystemInformation.DragSize.Height / 2,
@@ -1480,7 +2106,7 @@ namespace FileSender
                 SystemInformation.DragSize.Height);
             if (dragBox.Contains(e.Location)) return;
 
-            List<string> paths = SelectedLocalPaths();
+            List<string> paths = _localDragPaths != null && _localDragPaths.Count > 0 ? _localDragPaths : SelectedLocalPaths();
             if (paths.Count > 0)
             {
                 var data = new DataObject();
@@ -1488,17 +2114,29 @@ namespace FileSender
                 data.SetData(DataFormats.FileDrop, paths.ToArray());
                 _localGrid.DoDragDrop(data, DragDropEffects.Copy);
             }
-            _localDragStartPoint = Point.Empty;
+            ResetLocalMouseDrag();
+        }
+
+        private void LocalGridMouseUp(object sender, MouseEventArgs e)
+        {
+            ResetLocalMouseDrag();
         }
 
         private void RemoteGridMouseDown(object sender, MouseEventArgs e)
         {
-            _remoteDragStartPoint = e.Button == MouseButtons.Left ? e.Location : Point.Empty;
+            PrepareGridMouseDown(_remoteGrid, e, out _remoteDragStartPoint, out _remoteDragDropArmed, out _remoteSelectionAnchorRow);
+            _remoteDragPaths = _remoteDragDropArmed ? SelectedRemotePaths() : null;
         }
 
         private void RemoteGridMouseMove(object sender, MouseEventArgs e)
         {
             if (e.Button != MouseButtons.Left || _remoteDragStartPoint == Point.Empty) return;
+            if (!_remoteDragDropArmed)
+            {
+                ExtendMouseSelection(_remoteGrid, _remoteSelectionAnchorRow, e.Location);
+                return;
+            }
+
             Rectangle dragBox = new Rectangle(
                 _remoteDragStartPoint.X - SystemInformation.DragSize.Width / 2,
                 _remoteDragStartPoint.Y - SystemInformation.DragSize.Height / 2,
@@ -1506,14 +2144,70 @@ namespace FileSender
                 SystemInformation.DragSize.Height);
             if (dragBox.Contains(e.Location)) return;
 
-            List<string> paths = SelectedRemotePaths();
+            List<string> paths = _remoteDragPaths != null && _remoteDragPaths.Count > 0 ? _remoteDragPaths : SelectedRemotePaths();
             if (paths.Count > 0)
             {
                 var data = new DataObject();
                 data.SetData(RemotePathsDragFormat, paths.ToArray());
                 _remoteGrid.DoDragDrop(data, DragDropEffects.Copy);
             }
+            ResetRemoteMouseDrag();
+        }
+
+        private void RemoteGridMouseUp(object sender, MouseEventArgs e)
+        {
+            ResetRemoteMouseDrag();
+        }
+
+        private static void PrepareGridMouseDown(DataGridView grid, MouseEventArgs e, out Point dragStartPoint, out bool dragDropArmed, out int selectionAnchorRow)
+        {
+            dragStartPoint = Point.Empty;
+            dragDropArmed = false;
+            selectionAnchorRow = -1;
+
+            if (e.Button != MouseButtons.Left) return;
+
+            DataGridView.HitTestInfo hit = grid.HitTest(e.X, e.Y);
+            if (hit.RowIndex < 0) return;
+
+            bool selectionModifier = (Control.ModifierKeys & (Keys.Control | Keys.Shift)) != Keys.None;
+            if (selectionModifier) return;
+
+            dragStartPoint = e.Location;
+            selectionAnchorRow = hit.RowIndex;
+            dragDropArmed = !selectionModifier && grid.Rows[hit.RowIndex].Selected;
+        }
+
+        private static void ExtendMouseSelection(DataGridView grid, int anchorRow, Point location)
+        {
+            if (anchorRow < 0) return;
+
+            DataGridView.HitTestInfo hit = grid.HitTest(location.X, location.Y);
+            if (hit.RowIndex < 0) return;
+
+            int start = Math.Min(anchorRow, hit.RowIndex);
+            int end = Math.Max(anchorRow, hit.RowIndex);
+            grid.ClearSelection();
+            for (int i = start; i <= end; i++)
+            {
+                grid.Rows[i].Selected = true;
+            }
+        }
+
+        private void ResetLocalMouseDrag()
+        {
+            _localDragStartPoint = Point.Empty;
+            _localDragDropArmed = false;
+            _localSelectionAnchorRow = -1;
+            _localDragPaths = null;
+        }
+
+        private void ResetRemoteMouseDrag()
+        {
             _remoteDragStartPoint = Point.Empty;
+            _remoteDragDropArmed = false;
+            _remoteSelectionAnchorRow = -1;
+            _remoteDragPaths = null;
         }
 
         private void LocalGridDragEnter(object sender, DragEventArgs e)
@@ -1618,18 +2312,18 @@ namespace FileSender
                     fileCounter = "preparando " + progress.TotalFiles + " archivos";
                 }
 
-                _progressLabel.Text = string.Format("Total {0}: {1}% ({2}) - {3} archivos - ETA {4}",
+                _progressLabel.Text = string.Format("Total {0}: {1}% - {2} - {3} archivos - ETA {4}",
                     type,
                     totalPercent,
                     fileCounter,
                     progress.TotalFiles,
                     remaining);
-                _fileProgressLabel.Text = string.Format("Archivo actual: {0}% - {1} - {2} ({3} de {4})",
+                _fileProgressLabel.Text = string.Format("Archivo actual: {0}% - {1} ({2} de {3}) - {4}",
                     filePercent,
-                    fileCounter,
                     progress.FileName,
                     FileSystemEntry.FormatBytes(progress.CurrentFileBytesTransferred),
-                    FileSystemEntry.FormatBytes(progress.CurrentFileTotalBytes));
+                    FileSystemEntry.FormatBytes(progress.CurrentFileTotalBytes),
+                    fileCounter);
                 return;
             }
 
@@ -1666,8 +2360,8 @@ namespace FileSender
             _fileProgressBar.Value = 0;
             SetProgressActive(_progressBar);
             SetProgressActive(_fileProgressBar);
-            _progressLabel.Text = "Total: preparando transferencia...";
             _fileProgressLabel.Text = "Archivo: esperando primer archivo...";
+            _progressLabel.Text = "Total: preparando transferencia...";
         }
 
         private static void PrepareProgressBar(ProgressBar progressBar)

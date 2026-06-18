@@ -50,6 +50,7 @@ namespace FileSender.Network
         private BinaryWriter _writer;
         private NetworkStream _stream;
         private CancellationTokenSource _cts;
+        private bool _peerSupportsExtendedList;
 
         public string PeerName { get; private set; }
         public bool IsConnected { get { return _client != null && _client.Connected; } }
@@ -324,7 +325,7 @@ namespace FileSender.Network
                             HandleListRequest();
                             break;
                         case MessageType.ListResponse:
-                            RaiseRemoteList(FileTransferProtocol.ReadListResponse(_reader));
+                            RaiseRemoteList(FileTransferProtocol.ReadListResponse(_reader, _peerSupportsExtendedList));
                             break;
                         case MessageType.TransferOffer:
                             HandleTransferOffer(FileTransferProtocol.ReadTransferOffer(_reader));
@@ -367,7 +368,8 @@ namespace FileSender.Network
             bool accepted = magic == FileTransferProtocol.Magic && version == FileTransferProtocol.Version && key == _sharedKey;
             if (accepted)
             {
-                PeerName = peerName;
+                _peerSupportsExtendedList = FileTransferProtocol.SupportsExtendedList(peerName);
+                PeerName = FileTransferProtocol.StripPeerMarker(peerName);
                 Send(writer => FileTransferProtocol.WriteHelloResult(writer, true, "OK", Environment.MachineName));
                 RaiseStatus("Conectado con " + PeerName);
                 if (Connected != null) Connected();
@@ -390,7 +392,8 @@ namespace FileSender.Network
                 Dispose();
                 return;
             }
-            PeerName = peerName;
+            _peerSupportsExtendedList = FileTransferProtocol.SupportsExtendedList(peerName);
+            PeerName = FileTransferProtocol.StripPeerMarker(peerName);
             RaiseStatus("Conectado con " + PeerName);
             if (Connected != null) Connected();
         }
@@ -398,7 +401,7 @@ namespace FileSender.Network
         private void HandleListRequest()
         {
             string path = _reader.ReadString();
-            Send(writer => FileTransferProtocol.WriteListResponse(writer, BuildListResponse(path)));
+            Send(writer => FileTransferProtocol.WriteListResponse(writer, BuildListResponse(path), _peerSupportsExtendedList));
         }
 
         private static ListResponse BuildListResponse(string requestedPath)
@@ -416,7 +419,7 @@ namespace FileSender.Network
                         string name = string.IsNullOrWhiteSpace(label)
                             ? drive.Name
                             : drive.Name + " " + label;
-                        response.Entries.Add(new FileSystemEntry { Name = name, FullPath = drive.Name, IsDirectory = true, Size = 0 });
+                        response.Entries.Add(new FileSystemEntry { Name = name, FullPath = drive.Name, IsDirectory = true, Size = 0, LastModifiedUtc = DateTime.MinValue });
                     }
                     return response;
                 }
@@ -425,20 +428,20 @@ namespace FileSender.Network
                 DirectoryInfo parent = directory.Parent;
                 if (parent != null)
                 {
-                    response.Entries.Add(new FileSystemEntry { Name = "..", FullPath = parent.FullName, IsDirectory = true, Size = 0 });
+                    response.Entries.Add(new FileSystemEntry { Name = "..", FullPath = parent.FullName, IsDirectory = true, Size = 0, LastModifiedUtc = parent.LastWriteTimeUtc });
                 }
                 else
                 {
-                    response.Entries.Add(new FileSystemEntry { Name = "..", FullPath = "", IsDirectory = true, Size = 0 });
+                    response.Entries.Add(new FileSystemEntry { Name = "..", FullPath = "", IsDirectory = true, Size = 0, LastModifiedUtc = DateTime.MinValue });
                 }
 
                 foreach (DirectoryInfo child in directory.GetDirectories())
                 {
-                    response.Entries.Add(new FileSystemEntry { Name = child.Name, FullPath = child.FullName, IsDirectory = true, Size = 0 });
+                    response.Entries.Add(new FileSystemEntry { Name = child.Name, FullPath = child.FullName, IsDirectory = true, Size = 0, LastModifiedUtc = child.LastWriteTimeUtc });
                 }
                 foreach (FileInfo file in directory.GetFiles())
                 {
-                    response.Entries.Add(new FileSystemEntry { Name = file.Name, FullPath = file.FullName, IsDirectory = false, Size = file.Length });
+                    response.Entries.Add(new FileSystemEntry { Name = file.Name, FullPath = file.FullName, IsDirectory = false, Size = file.Length, LastModifiedUtc = file.LastWriteTimeUtc });
                 }
             }
             catch
