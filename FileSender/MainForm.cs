@@ -2393,6 +2393,7 @@ namespace FileSender
 
         private void SetStatus(string text)
         {
+            if (_statusLabel == null) return;
             if (InvokeRequired)
             {
                 BeginInvoke(new Action<string>(SetStatus), text);
